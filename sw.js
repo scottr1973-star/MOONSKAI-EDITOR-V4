@@ -19,7 +19,6 @@ const ASSETS = [
   "./vendor/monaco/vs/base/common/worker/simpleWorker.nls.js",
   "./vendor/monaco/vs/base/worker/workerMain.js",
 ];
-];
 
 self.addEventListener("install", (event) => {
   event.waitUntil((async () => {
