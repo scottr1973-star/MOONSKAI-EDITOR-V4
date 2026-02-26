@@ -11,24 +11,23 @@ const ASSETS = [
   "./styles.css",
   "./moonskai-editor.js",
   "./manifest.json",
+
+  // Monaco essentials (match your current folder layout)
   "./vendor/monaco/vs/loader.js",
   "./vendor/monaco/vs/editor/editor.main.js",
   "./vendor/monaco/vs/editor/editor.main.css",
   "./vendor/monaco/vs/base/common/worker/simpleWorker.nls.js",
   "./vendor/monaco/vs/base/worker/workerMain.js",
-  "./vendor/monaco/vs/basic-languages/javascript/javascript.js",
-  "./vendor/monaco/vs/basic-languages/typescript/typescript.js",
-  "./vendor/monaco/vs/basic-languages/html/html.js",
-  "./vendor/monaco/vs/basic-languages/css/css.js",
-  "./vendor/monaco/vs/basic-languages/json/json.js",
-  "./vendor/monaco/vs/basic-languages/yaml/yaml.js",
-  "./vendor/monaco/vs/basic-languages/markdown/markdown.js"
+];
 ];
 
 self.addEventListener("install", (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS)).then(() => self.skipWaiting())
-  );
+  event.waitUntil((async () => {
+    const cache = await caches.open(CACHE_NAME);
+    // Cache what we can; don't fail the whole install if one URL 404s.
+    await Promise.allSettled(ASSETS.map((u) => cache.add(u)));
+    await self.skipWaiting();
+  })());
 });
 
 self.addEventListener("activate", (event) => {
