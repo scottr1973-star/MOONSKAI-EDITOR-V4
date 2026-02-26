@@ -1,8 +1,8 @@
 {
   "name": "Moonskai Editor",
   "short_name": "Moonskai",
-  "description": "Moonskai Editor v2 — lightweight multi-tab editor with Flow highlighting (Monaco).",
-  "start_url": "./index.html",
+  "description": "Moonskai Editor v4 — lightweight multi-tab Monaco editor (offline/PWA) with split compare + true diff + scroll lock.",
+  "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "background_color": "#0b0f12",
