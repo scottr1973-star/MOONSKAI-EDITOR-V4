@@ -1,0 +1,16 @@
+# Never commit local plugin folders
+plug_ins/
+ai_plugin_folder/
+ai_plug_in/
+
+# Secrets
+.env
+.env.*
+*.key
+*.pem
+
+# OS / tooling
+.DS_Store
+Thumbs.db
+*.log
+node_modules/

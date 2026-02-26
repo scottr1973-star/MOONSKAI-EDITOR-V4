@@ -1,0 +1,330 @@
+<!--
+FILE: /index.html
+PURPOSE: Moonskai Editor v4 — lightweight multi-tab editor (Monaco local) + PWA hooks + split compare + true diff + scroll lock.
+CREATED BY: Scott Russo.
+-->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#0b0f12" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <link rel="manifest" href="./manifest.json" />
+  <link rel="stylesheet" href="./styles.css" />
+  <link rel="icon" href="data:,">
+  <title>Moonskai Editor</title>
+</head>
+<body>
+  <div class="ide-container">
+    <header class="toolbar">
+      <div class="toolbar-left">
+        <div class="brand" aria-label="Moonskai Editor">
+          <div class="brand-badge">🌙</div>
+          <div class="brand-text">
+            <div class="brand-title">Moonskai Editor</div>
+                  <div class="brand-sub">v4 • Split/Single + Diff + Plugins</div>
+
+          </div>
+        </div>
+
+        <div class="toolbar-actions" role="toolbar" aria-label="File actions">
+          <button id="newFile" class="btn" type="button">New</button>
+          <button id="openFile" class="btn" type="button">Open</button>
+          <button id="saveFile" class="btn primary" type="button">Save</button>
+          <button id="saveAsFile" class="btn" type="button">Save As</button>
+          <button id="saveAll" class="btn" type="button">Save All</button>
+
+          <span class="toolbar-sep" aria-hidden="true"></span>
+
+          <button id="openCompare" class="btn" type="button" title="Open a file into the right pane (compare)">Compare</button>
+          <button id="clearCompare" class="btn" type="button" title="Clear the right pane">Clear</button>
+
+                    <button id="diffMode" class="btn" type="button" aria-pressed="false" title="Toggle Diff mode">Diff</button>
+          <button id="viewToggle" class="btn" type="button" aria-pressed="false" title="Toggle split vs single view">Single View</button>
+
+          <button id="scrollLock" class="btn" type="button" aria-pressed="false" title="Lock right pane scroll to left">Lock Scroll</button>
+          <label class="select-wrap" title="Scroll lock mode">
+            <span>Mode</span>
+            <select id="lockMode">
+              <option value="sync">Sync</option>
+              <option value="offset">Offset</option>
+            </select>
+          </label>
+
+          <span class="toolbar-sep" aria-hidden="true"></span>
+
+                    <label class="select-wrap" title="Run plugin actions">
+            <span class="select-label">Plugin</span>
+            <select id="pluginSelect" class="select" aria-label="Plugin actions">
+              <option value="">Actions…</option>
+            </select>
+          </label>
+
+          <button id="pluginsBtn" class="btn" type="button" title="Manage plugins">Plugins</button>
+
+          <button id="settingsBtn" class="btn" type="button">Settings</button>
+          <button id="installBtn" class="btn" type="button" style="display:none;">Install</button>
+
+          <input id="pluginFileInput" type="file" accept=".js,text/javascript,application/javascript" style="display:none" />
+                    <input id="pluginFolderInput" type="file" webkitdirectory directory multiple style="display:none" />
+                              <input id="fileInput" type="file" multiple style="display:none" />
+          <input id="compareFileInput" type="file" style="display:none" />
+
+        </div>
+      </div>
+
+      <div class="toolbar-right">
+        <label class="select-wrap">
+          <span class="select-label">Language</span>
+          <select id="languageSelect" class="select"></select>
+        </label>
+
+        <label class="select-wrap">
+          <span class="select-label">Theme</span>
+          <select id="themeSelect" class="select">
+            <option value="moonskai-dark">Moonskai Dark</option>
+            <option value="vs">Light</option>
+            <option value="vs-dark">VS Dark</option>
+            <option value="hc-black">High Contrast</option>
+          </select>
+        </label>
+      </div>
+    </header>
+
+    <nav class="tabs-bar" aria-label="Open files">
+      <div id="tabs" class="tabs"></div>
+    </nav>
+
+    <main class="editor-container" id="editorWrap">
+      <!-- SPLIT VIEW -->
+      <div id="splitWrap" class="split-wrap" aria-label="Split editor view">
+        <section class="pane pane-left" aria-label="Master editor (left)">
+          <div class="pane-label">MASTER</div>
+          <div id="editorLeft" class="editor-host"></div>
+        </section>
+
+        <section class="pane pane-right" aria-label="Compare editor (right)">
+          <div class="pane-label">COMPARE</div>
+          <div id="editorRight" class="editor-host"></div>
+
+          <div id="compareOverlay" class="pane-overlay" aria-live="polite">
+            <div class="overlay-card">
+              <div class="overlay-title">No compare file loaded</div>
+              <div class="overlay-sub">Click <b>Compare</b> to open a file into the right pane.</div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- TRUE DIFF VIEW (Monaco DiffEditor) -->
+      <div id="diffWrap" class="diff-wrap" aria-label="Diff editor view" style="display:none">
+        <div id="diffEditor" class="editor-host"></div>
+      </div>
+
+      <div id="bootOverlay" class="boot-overlay" aria-live="polite">
+        <div class="boot-card">
+          <div class="boot-title">Loading editor…</div>
+          <div class="boot-sub">If this stays visible, Monaco didn’t load. The error will show below.</div>
+          <pre id="bootDetails" class="boot-details">Starting…</pre>
+        </div>
+      </div>
+    </main>
+
+    <footer class="status-bar" role="status">
+      <div class="status-left">
+        <span id="fileStatus">Booting…</span>
+        <span id="dirtyStatus" class="pill" title="Unsaved changes" style="display:none">Unsaved</span>
+      </div>
+      <div class="status-right">
+        <span id="fileName" class="mono">untitled</span>
+        <span id="compareName" class="mono">Compare: —</span>
+        <span id="cursorPosition" class="mono">Ln 1, Col 1</span>
+        <span id="eolMode" class="mono">LF</span>
+        <span id="fileLanguage">—</span>
+      </div>
+    </footer>
+
+    <dialog id="settingsDialog" class="dialog">
+      <form method="dialog" class="dialog-card">
+        <header class="dialog-head">
+          <div class="dialog-title">Settings</div>
+          <button class="btn" value="close" aria-label="Close settings">Close</button>
+        </header>
+
+        <div class="dialog-body">
+          <div class="card">
+            <div class="card-title">Editor</div>
+            <label class="row">
+              <span>Word wrap</span>
+              <input id="settingWordWrap" type="checkbox" />
+            </label>
+            <label class="row">
+              <span>Minimap</span>
+              <input id="settingMinimap" type="checkbox" />
+            </label>
+            <label class="row">
+              <span>Font size</span>
+              <input id="settingFontSize" type="number" min="10" max="28" step="1" />
+            </label>
+                        <label class="row">
+              <span>Autosave (only after Save / Save As)</span>
+              <input id="settingAutosave" type="checkbox" />
+            </label>
+
+            <label class="row">
+              <span>Line numbers</span>
+              <input id="settingLineNumbers" type="checkbox" />
+            </label>
+
+            <label class="row">
+              <span>Tab size</span>
+              <input id="settingTabSize" type="number" min="1" max="8" step="1" />
+            </label>
+
+            <label class="row">
+              <span>Insert spaces</span>
+              <input id="settingInsertSpaces" type="checkbox" />
+            </label>
+
+            <label class="row">
+              <span>Trim trailing whitespace on save</span>
+              <input id="settingTrimTrailing" type="checkbox" />
+            </label>
+
+          </div>
+
+                           <div class="card">
+            <div class="card-title">Storage</div>
+            <div class="muted small">Your documents are saved in this browser (IndexedDB).</div>
+            <button id="clearSessionBtn" class="btn danger" type="button">Clear session docs</button>
+          </div>
+        </div>
+        <footer class="dialog-foot">
+          <button class="btn primary" value="close">Done</button>
+        </footer>
+      </form>
+        </dialog>
+
+    <dialog id="pluginsDialog" class="dialog">
+      <form method="dialog" class="dialog-card">
+        <header class="dialog-head">
+          <div class="dialog-title">Plugins</div>
+          <button class="btn" value="close" aria-label="Close">×</button>
+        </header>
+
+        <div class="dialog-body">
+          <div class="card">
+            <div class="card-title">Installed plugins</div>
+            <div class="muted small">Plugins are stored locally in this browser (IndexedDB).</div>
+
+            <div id="pluginList" class="plugin-list"></div>
+
+                        <div class="plugin-actions-bar">
+              <button id="installPluginBtn" class="btn primary" type="button">Install plugin (.js)…</button>
+              <button id="installPluginFolderBtn" class="btn" type="button">Install folder…</button>
+              <button id="clearPluginsBtn" class="btn danger" type="button">Remove all</button>
+            </div>
+          </div>
+        </div>
+
+        <footer class="dialog-foot">
+          <button class="btn primary" value="close">Done</button>
+        </footer>
+      </form>
+    </dialog>
+  </div>
+
+
+  <!-- Monaco loader (local) -->
+  <script src="vendor/monaco/vs/loader.js"></script>
+  <script>
+    window.MONACO_VS_BASE = "vendor/monaco/vs";
+  </script>
+
+    <!-- App -->
+    <!-- App -->
+  <script>
+            // Capture errors BEFORE moonskai-editor.js runs (so syntax/runtime issues show on the overlay)
+    (function () {
+      const boot = document.getElementById("bootDetails");
+      function setBoot(msg) { if (boot) boot.textContent = msg; }
+
+      window.addEventListener("error", function (e) {
+        try {
+          const err = e && e.error ? e.error : null;
+          const msg = err && (err.stack || err.message)
+            ? (err.stack || err.message)
+            : (e && e.message ? e.message : "Runtime error");
+
+          const src = (e && e.filename) ? e.filename : "(unknown)";
+          const line = (e && typeof e.lineno === "number") ? e.lineno : 0;
+          const col = (e && typeof e.colno === "number") ? e.colno : 0;
+
+          setBoot("ERROR: Runtime error\n\n" + msg + "\n" + "at " + src + ":" + line + ":" + col);
+        } catch (_) {}
+      });
+
+      window.addEventListener("unhandledrejection", function (e) {
+        try {
+          const r = (e && e.reason) ? e.reason : "(no reason)";
+          const msg = (r && (r.stack || r.message)) ? (r.stack || r.message) : String(r);
+          setBoot("ERROR: Unhandled promise rejection\n\n" + msg);
+        } catch (_) {}
+      });
+    })();
+  </script>
+
+
+    <script src="./moonskai-editor.js"
+          onerror="(function(){try{var b=document.getElementById('bootDetails'); if(b) b.textContent='ERROR: failed to load ./moonskai-editor.js (check filename/path)';}catch(e){}})()"></script>
+
+  <script>
+    // Monaco bootstrapping (same-origin, GH Pages + localhost friendly)
+    (function () {
+      const boot = document.getElementById("bootDetails");
+      function setBoot(msg) { boot.textContent = msg; }
+
+      if (!window.require) {
+        setBoot("ERROR: Monaco loader did not define require(). Check vendor/monaco/vs/loader.js");
+        return;
+      }
+
+            // Worker support (blob worker must importScripts() using absolute URLs)
+      window.MonacoEnvironment = window.MonacoEnvironment || {};
+      window.MonacoEnvironment.getWorkerUrl = function () {
+        const vsBaseAbs = new URL(window.MONACO_VS_BASE + "/", window.location.href).toString();
+        const workerMainAbs = new URL("base/worker/workerMain.js", vsBaseAbs).toString();
+
+        const js = [
+          "self.MonacoEnvironment = { baseUrl: " + JSON.stringify(vsBaseAbs) + " };",
+          "importScripts(" + JSON.stringify(workerMainAbs) + ");"
+        ].join("\n");
+
+        return URL.createObjectURL(new Blob([js], { type: "text/javascript" }));
+      };
+
+
+      setBoot("Configuring AMD loader…");
+      require.config({ paths: { vs: window.MONACO_VS_BASE } });
+
+      setBoot("Loading Monaco core…");
+      require(["vs/editor/editor.main"], function () {
+        try {
+          setBoot("Starting Moonskai Editor…");
+                    if (typeof window.bootMoonskaiEditor !== "function") {
+                                                setBoot("ERROR: bootMoonskaiEditor() not found. moonskai-editor.js failed to load or crashed before defining it.");
+            return;
+          }
+          window.bootMoonskaiEditor();
+
+        } catch (e) {
+          setBoot("ERROR: bootMoonskaiEditor crashed:\n\n" + (e && (e.stack || e.message) ? (e.stack || e.message) : String(e)));
+        }
+      }, function (err) {
+        setBoot("ERROR: Monaco failed to load modules:\n\n" + (err && (err.stack || err.message) ? (err.stack || err.message) : String(err)));
+      });
+    })();
+  </script>
+</body>
+</html>
