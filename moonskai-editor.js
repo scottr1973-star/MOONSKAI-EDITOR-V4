@@ -554,7 +554,7 @@ KEY V3 FEATURES:
       el.className = `tab${t.id === state.activeId ? " active" : ""}${t.dirty ? " dirty" : ""}`;
       el.setAttribute("data-id", t.id);
       el.setAttribute("data-idx", String(i));
-      el.draggable = true;
+      el.draggable = false;
 
       const dot = document.createElement("div");
       dot.className = "dot";
@@ -1825,10 +1825,13 @@ KEY V3 FEATURES:
       setActiveTab(id);
     });
     // ---------------------------
-    // Tab reorder (drag & drop)
+           // Tab reorder (pointer events - PWA safe)
     // ---------------------------
     let __dragTabId = null;
-
+    let __dragPointerId = null;
+    let __dragStartX = 0;
+    let __dragStartY = 0;
+    let __isDraggingTabs = false;
     function __moveTabById(dragId, targetId, insertAfter) {
       if (!dragId || !targetId || dragId === targetId) return;
 
@@ -1849,80 +1852,98 @@ KEY V3 FEATURES:
       persistSessionSoon();
     }
 
-          // Pointer-based tab reorder (works in installed PWA windows where HTML5 DnD can fail)
-      let __tabDrag = null; // { id, startX, active, lastOverId }
+        function __clearTabDraggingUI() {
+      try {
+        document.querySelectorAll(".tab.dragging").forEach(el => el.classList.remove("dragging"));
+      } catch (_) {}
+    }
 
-      function __tabElFromEventTarget(t) {
-        try { return t && t.closest ? t.closest(".tab") : null; } catch (_) { return null; }
-      }
+    function __endTabPointerDrag() {
+      __dragTabId = null;
+      __dragPointerId = null;
+      __isDraggingTabs = false;
+      __clearTabDraggingUI();
+    }
 
-      function __tabIdFromEl(el) {
-        try { return el ? (el.getAttribute("data-id") || "") : ""; } catch (_) { return ""; }
-      }
+    ui.tabs.addEventListener("pointerdown", (e) => {
+      // Only primary pointer. For mouse: only left button.
+      if (e.isPrimary === false) return;
+      if (e.pointerType === "mouse" && e.button !== 0) return;
 
-      function __insertAfterByPointer(overEl, clientX) {
+      const tabEl = e.target && e.target.closest ? e.target.closest(".tab") : null;
+      if (!tabEl) return;
+
+      // Don't start dragging from the close button.
+      const isClose = e.target && e.target.closest ? e.target.closest(".close") : null;
+      if (isClose) return;
+
+      __dragTabId = tabEl.getAttribute("data-id") || null;
+      __dragPointerId = e.pointerId;
+      __dragStartX = e.clientX;
+      __dragStartY = e.clientY;
+      __isDraggingTabs = false;
+
+      // Capture on container so capture survives renderTabs().
+      try { ui.tabs.setPointerCapture(e.pointerId); } catch (_) {}
+      // IMPORTANT: do NOT preventDefault here, or click-to-activate can break.
+    });
+
+    ui.tabs.addEventListener("pointermove", (e) => {
+      if (!__dragTabId || __dragPointerId == null || e.pointerId !== __dragPointerId) return;
+
+      const dx = e.clientX - __dragStartX;
+      const dy = e.clientY - __dragStartY;
+
+      if (!__isDraggingTabs) {
+        const THRESH = 6;
+        if (Math.abs(dx) < THRESH && Math.abs(dy) < THRESH) return;
+
+        __isDraggingTabs = true;
+        __clearTabDraggingUI();
         try {
-          const r = overEl.getBoundingClientRect();
-          return (clientX - r.left) > (r.width / 2);
-        } catch (_) {
-          return false;
-        }
+          const el = ui.tabs.querySelector('.tab[data-id="' + __dragTabId + '"]');
+          if (el) el.classList.add("dragging");
+        } catch (_) {}
       }
 
-      ui.tabs.addEventListener("pointerdown", (e) => {
-        const tabEl = __tabElFromEventTarget(e.target);
-        if (!tabEl) return;
+      // While dragging, prevent scroll/pan.
+      try { e.preventDefault(); } catch (_) {}
 
-        // Don't start dragging from the close button.
-        const isClose = e.target && e.target.closest ? e.target.closest(".close") : null;
-        if (isClose) return;
+      // Identify the tab under the pointer.
+      let overEl = null;
+      try {
+        const hit = document.elementFromPoint(e.clientX, e.clientY);
+        overEl = hit && hit.closest ? hit.closest(".tab") : null;
+      } catch (_) {}
+      if (!overEl) return;
 
-        const id = __tabIdFromEl(tabEl);
-        if (!id) return;
+      const overId = overEl.getAttribute("data-id");
+      if (!overId || overId === __dragTabId) return;
 
-        __tabDrag = { id, startX: e.clientX, active: false, lastOverId: "" };
+      // Decide insert before/after based on cursor position.
+      let insertAfter = false;
+      try {
+        const r = overEl.getBoundingClientRect();
+        insertAfter = (e.clientX - r.left) > (r.width / 2);
+      } catch (_) {}
 
-        try { tabEl.setPointerCapture(e.pointerId); } catch (_) {}
-      });
+      __moveTabById(__dragTabId, overId, insertAfter);
+    });
 
-      ui.tabs.addEventListener("pointermove", (e) => {
-        if (!__tabDrag) return;
+    ui.tabs.addEventListener("pointerup", (e) => {
+      if (__dragPointerId == null || e.pointerId !== __dragPointerId) return;
+      __endTabPointerDrag();
+    });
 
-        // Activate drag after small threshold (prevents breaking normal clicks)
-        if (!__tabDrag.active) {
-          if (Math.abs(e.clientX - __tabDrag.startX) < 6) return;
-          __tabDrag.active = true;
-        }
+    ui.tabs.addEventListener("pointercancel", (e) => {
+      if (__dragPointerId == null || e.pointerId !== __dragPointerId) return;
+      __endTabPointerDrag();
+    });
 
-        const overEl = __tabElFromEventTarget(document.elementFromPoint(e.clientX, e.clientY));
-        if (!overEl) return;
-
-        const overId = __tabIdFromEl(overEl);
-        if (!overId || overId === __tabDrag.id) return;
-
-        // Avoid hammering reorder if we're still over same tab
-        if (__tabDrag.lastOverId === overId) return;
-        __tabDrag.lastOverId = overId;
-
-        const insertAfter = __insertAfterByPointer(overEl, e.clientX);
-        __moveTabById(__tabDrag.id, overId, insertAfter);
-      });
-
-      ui.tabs.addEventListener("pointerup", (e) => {
-        if (!__tabDrag) return;
-
-        // If we were dragging, prevent the click that would fire after pointerup
-        if (__tabDrag.active) {
-          try { e.preventDefault(); } catch (_) {}
-          try { e.stopPropagation(); } catch (_) {}
-        }
-
-        __tabDrag = null;
-      });
-
-      ui.tabs.addEventListener("pointercancel", () => {
-        __tabDrag = null;
-      });
+    ui.tabs.addEventListener("lostpointercapture", (e) => {
+      if (__dragPointerId == null || e.pointerId !== __dragPointerId) return;
+      __endTabPointerDrag();
+    });
     ui.languageSelect.addEventListener("change", async () => {
       const t = activeTab();
       if (!t) return;
@@ -2371,27 +2392,6 @@ KEY V3 FEATURES:
         e.preventDefault();
         newTab();
       }
-              // Tab reorder fallback (works in installed PWA where drag can be blocked)
-        // Alt+Shift+Left / Alt+Shift+Right moves the active tab.
-        if (e.altKey && e.shiftKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
-          const t = activeTab();
-          if (!t) return;
-
-          const cur = state.tabs.findIndex(x => x && x.id === t.id);
-          if (cur < 0) return;
-
-          const dir = (e.key === "ArrowLeft") ? -1 : 1;
-          const next = cur + dir;
-          if (next < 0 || next >= state.tabs.length) return;
-
-          e.preventDefault();
-
-          const targetId = state.tabs[next].id;
-          // If moving right, insert after the target; if moving left, insert before.
-          __moveTabById(t.id, targetId, dir > 0);
-
-          return;
-        }
     });
   }
 
