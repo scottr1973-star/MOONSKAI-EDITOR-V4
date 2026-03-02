@@ -554,7 +554,7 @@ KEY V3 FEATURES:
       el.className = `tab${t.id === state.activeId ? " active" : ""}${t.dirty ? " dirty" : ""}`;
       el.setAttribute("data-id", t.id);
       el.setAttribute("data-idx", String(i));
-      el.draggable = false;
+      el.draggable = true;
 
       const dot = document.createElement("div");
       dot.className = "dot";
@@ -1825,13 +1825,10 @@ KEY V3 FEATURES:
       setActiveTab(id);
     });
     // ---------------------------
-           // Tab reorder (pointer events - PWA safe)
+    // Tab reorder (drag & drop)
     // ---------------------------
     let __dragTabId = null;
-    let __dragPointerId = null;
-    let __dragStartX = 0;
-    let __dragStartY = 0;
-    let __isDraggingTabs = false;
+
     function __moveTabById(dragId, targetId, insertAfter) {
       if (!dragId || !targetId || dragId === targetId) return;
 
@@ -1852,98 +1849,196 @@ KEY V3 FEATURES:
       persistSessionSoon();
     }
 
-        function __clearTabDraggingUI() {
-      try {
-        document.querySelectorAll(".tab.dragging").forEach(el => el.classList.remove("dragging"));
-      } catch (_) {}
-    }
-
-    function __endTabPointerDrag() {
-      __dragTabId = null;
-      __dragPointerId = null;
-      __isDraggingTabs = false;
-      __clearTabDraggingUI();
-    }
-
-    ui.tabs.addEventListener("pointerdown", (e) => {
-      // Only primary pointer. For mouse: only left button.
-      if (e.isPrimary === false) return;
-      if (e.pointerType === "mouse" && e.button !== 0) return;
-
+    ui.tabs.addEventListener("dragstart", (e) => {
       const tabEl = e.target && e.target.closest ? e.target.closest(".tab") : null;
       if (!tabEl) return;
 
       // Don't start dragging from the close button.
       const isClose = e.target && e.target.closest ? e.target.closest(".close") : null;
-      if (isClose) return;
-
-      __dragTabId = tabEl.getAttribute("data-id") || null;
-      __dragPointerId = e.pointerId;
-      __dragStartX = e.clientX;
-      __dragStartY = e.clientY;
-      __isDraggingTabs = false;
-
-      // Capture on container so capture survives renderTabs().
-      try { ui.tabs.setPointerCapture(e.pointerId); } catch (_) {}
-      // IMPORTANT: do NOT preventDefault here, or click-to-activate can break.
-    });
-
-    ui.tabs.addEventListener("pointermove", (e) => {
-      if (!__dragTabId || __dragPointerId == null || e.pointerId !== __dragPointerId) return;
-
-      const dx = e.clientX - __dragStartX;
-      const dy = e.clientY - __dragStartY;
-
-      if (!__isDraggingTabs) {
-        const THRESH = 6;
-        if (Math.abs(dx) < THRESH && Math.abs(dy) < THRESH) return;
-
-        __isDraggingTabs = true;
-        __clearTabDraggingUI();
-        try {
-          const el = ui.tabs.querySelector('.tab[data-id="' + __dragTabId + '"]');
-          if (el) el.classList.add("dragging");
-        } catch (_) {}
+      if (isClose) {
+        try { e.preventDefault(); } catch (_) {}
+        return;
       }
 
-      // While dragging, prevent scroll/pan.
-      try { e.preventDefault(); } catch (_) {}
+      __dragTabId = tabEl.getAttribute("data-id") || null;
 
-      // Identify the tab under the pointer.
-      let overEl = null;
       try {
-        const hit = document.elementFromPoint(e.clientX, e.clientY);
-        overEl = hit && hit.closest ? hit.closest(".tab") : null;
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", __dragTabId || "");
       } catch (_) {}
-      if (!overEl) return;
 
-      const overId = overEl.getAttribute("data-id");
+      try { tabEl.classList.add("dragging"); } catch (_) {}
+    });
+
+    ui.tabs.addEventListener("dragend", () => {
+      __dragTabId = null;
+      try {
+        document.querySelectorAll(".tab.dragging").forEach(el => el.classList.remove("dragging"));
+      } catch (_) {}
+    });
+
+    ui.tabs.addEventListener("dragover", (e) => {
+      if (!__dragTabId) return;
+
+      const over = e.target && e.target.closest ? e.target.closest(".tab") : null;
+      if (!over) return;
+      const overId = over.getAttribute("data-id");
       if (!overId || overId === __dragTabId) return;
+
+      // Required so drop fires.
+      try { e.preventDefault(); } catch (_) {}
+      try { e.dataTransfer.dropEffect = "move"; } catch (_) {}
+    });
+
+    ui.tabs.addEventListener("drop", (e) => {
+      if (!__dragTabId) return;
+
+      const over = e.target && e.target.closest ? e.target.closest(".tab") : null;
+      if (!over) return;
+
+      const targetId = over.getAttribute("data-id");
+      if (!targetId || targetId === __dragTabId) return;
+
+      try { e.preventDefault(); } catch (_) {}
 
       // Decide insert before/after based on cursor position.
       let insertAfter = false;
       try {
-        const r = overEl.getBoundingClientRect();
+        const r = over.getBoundingClientRect();
         insertAfter = (e.clientX - r.left) > (r.width / 2);
       } catch (_) {}
 
-      __moveTabById(__dragTabId, overId, insertAfter);
+      __moveTabById(__dragTabId, targetId, insertAfter);
+      __dragTabId = null;
     });
+          // PWA-only fallback for tab reorder.
+      // Keep the working HTML5 drag/drop path for normal browser windows.
+      const __isStandalonePWA = (() => {
+        try {
+          return (
+            (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) ||
+            window.navigator.standalone === true
+          );
+        } catch (_) {
+          return false;
+        }
+      })();
 
-    ui.tabs.addEventListener("pointerup", (e) => {
-      if (__dragPointerId == null || e.pointerId !== __dragPointerId) return;
-      __endTabPointerDrag();
-    });
+      if (__isStandalonePWA) {
+        let __pwaDragTabId = null;
+        let __pwaPointerId = null;
+        let __pwaLastMarker = null;
+        let __pwaStartX = 0;
+        let __pwaStartY = 0;
+        let __pwaDragging = false;
 
-    ui.tabs.addEventListener("pointercancel", (e) => {
-      if (__dragPointerId == null || e.pointerId !== __dragPointerId) return;
-      __endTabPointerDrag();
-    });
+        function __clearPwaTabDrag() {
+          __pwaDragTabId = null;
+          __pwaPointerId = null;
+          __pwaLastMarker = null;
+          __pwaStartX = 0;
+          __pwaStartY = 0;
+          __pwaDragging = false;
 
-    ui.tabs.addEventListener("lostpointercapture", (e) => {
-      if (__dragPointerId == null || e.pointerId !== __dragPointerId) return;
-      __endTabPointerDrag();
-    });
+          try {
+            document.querySelectorAll(".tab.dragging").forEach(el => el.classList.remove("dragging"));
+          } catch (_) {}
+
+          document.removeEventListener("pointermove", __onPwaTabPointerMove, true);
+          document.removeEventListener("pointerup", __onPwaTabPointerEnd, true);
+          document.removeEventListener("pointercancel", __onPwaTabPointerEnd, true);
+        }
+
+        function __onPwaTabPointerMove(e) {
+          if (!__pwaDragTabId || __pwaPointerId !== e.pointerId) return;
+
+          const dx = e.clientX - __pwaStartX;
+          const dy = e.clientY - __pwaStartY;
+
+          if (!__pwaDragging) {
+            if ((Math.abs(dx) + Math.abs(dy)) < 6) return;
+            __pwaDragging = true;
+
+            try {
+              const dragEl = ui.tabs && ui.tabs.querySelector
+                ? ui.tabs.querySelector(`.tab[data-id="${__pwaDragTabId}"]`)
+                : null;
+              if (dragEl) dragEl.classList.add("dragging");
+            } catch (_) {}
+          }
+
+          let over = null;
+          try {
+            over = document.elementFromPoint(e.clientX, e.clientY);
+            over = over && over.closest ? over.closest(".tab") : null;
+          } catch (_) {
+            over = null;
+          }
+
+          if (!over) {
+            try { e.preventDefault(); } catch (_) {}
+            return;
+          }
+
+          const targetId = over.getAttribute("data-id");
+          if (!targetId || targetId === __pwaDragTabId) {
+            try { e.preventDefault(); } catch (_) {}
+            return;
+          }
+
+          let insertAfter = false;
+          try {
+            const r = over.getBoundingClientRect();
+            insertAfter = (e.clientX - r.left) > (r.width / 2);
+          } catch (_) {}
+
+          const marker = `${targetId}:${insertAfter ? "after" : "before"}`;
+          if (__pwaLastMarker === marker) {
+            try { e.preventDefault(); } catch (_) {}
+            return;
+          }
+
+          __moveTabById(__pwaDragTabId, targetId, insertAfter);
+          __pwaLastMarker = marker;
+
+          try {
+            const dragEl = ui.tabs && ui.tabs.querySelector
+              ? ui.tabs.querySelector(`.tab[data-id="${__pwaDragTabId}"]`)
+              : null;
+            if (dragEl) dragEl.classList.add("dragging");
+          } catch (_) {}
+
+          try { e.preventDefault(); } catch (_) {}
+        }
+
+        function __onPwaTabPointerEnd(e) {
+          if (__pwaPointerId !== e.pointerId) return;
+          __clearPwaTabDrag();
+        }
+
+        ui.tabs.addEventListener("pointerdown", (e) => {
+          if (e.button !== 0) return;
+
+          const tabEl = e.target && e.target.closest ? e.target.closest(".tab") : null;
+          if (!tabEl) return;
+
+          const isClose = e.target && e.target.closest ? e.target.closest(".close") : null;
+          if (isClose) return;
+
+          __pwaDragTabId = tabEl.getAttribute("data-id") || null;
+          if (!__pwaDragTabId) return;
+
+          __pwaPointerId = e.pointerId;
+          __pwaLastMarker = null;
+          __pwaStartX = e.clientX;
+          __pwaStartY = e.clientY;
+          __pwaDragging = false;
+
+          document.addEventListener("pointermove", __onPwaTabPointerMove, true);
+          document.addEventListener("pointerup", __onPwaTabPointerEnd, true);
+          document.addEventListener("pointercancel", __onPwaTabPointerEnd, true);
+        }, true);
+      }
     ui.languageSelect.addEventListener("change", async () => {
       const t = activeTab();
       if (!t) return;
