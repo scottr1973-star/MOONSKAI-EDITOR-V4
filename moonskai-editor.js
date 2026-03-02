@@ -2371,6 +2371,27 @@ KEY V3 FEATURES:
         e.preventDefault();
         newTab();
       }
+              // Tab reorder fallback (works in installed PWA where drag can be blocked)
+        // Alt+Shift+Left / Alt+Shift+Right moves the active tab.
+        if (e.altKey && e.shiftKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+          const t = activeTab();
+          if (!t) return;
+
+          const cur = state.tabs.findIndex(x => x && x.id === t.id);
+          if (cur < 0) return;
+
+          const dir = (e.key === "ArrowLeft") ? -1 : 1;
+          const next = cur + dir;
+          if (next < 0 || next >= state.tabs.length) return;
+
+          e.preventDefault();
+
+          const targetId = state.tabs[next].id;
+          // If moving right, insert after the target; if moving left, insert before.
+          __moveTabById(t.id, targetId, dir > 0);
+
+          return;
+        }
     });
   }
 
