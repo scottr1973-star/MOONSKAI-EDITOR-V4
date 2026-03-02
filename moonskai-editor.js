@@ -48,11 +48,13 @@ KEY V3 FEATURES:
   const STORE_KV = "kv";
   const STORE_PLUGINS = "plugins";
 
-  function openDB() {
+    function openDB() {
     return new Promise((resolve, reject) => {
       const req = indexedDB.open(DB_NAME, DB_VER);
+
       req.onerror = () => reject(req.error);
       req.onsuccess = () => resolve(req.result);
+
       req.onupgradeneeded = () => {
         const db = req.result;
         if (!db.objectStoreNames.contains(STORE_DOCS)) db.createObjectStore(STORE_DOCS, { keyPath: "id" });
@@ -61,9 +63,7 @@ KEY V3 FEATURES:
       };
     });
   }
-
-
-  async function kvGet(key) {
+   async function kvGet(key) {
     const db = await openDB();
     return new Promise((resolve, reject) => {
       const tx = db.transaction(STORE_KV, "readonly");
@@ -73,7 +73,6 @@ KEY V3 FEATURES:
       req.onsuccess = () => resolve(req.result ? req.result.value : null);
     });
   }
-
   async function kvSet(key, value) {
     const db = await openDB();
     return new Promise((resolve, reject) => {
@@ -548,10 +547,14 @@ KEY V3 FEATURES:
   function renderTabs() {
     ui.tabs.innerHTML = "";
 
-    for (const t of state.tabs) {
+        for (let i = 0; i < state.tabs.length; i++) {
+      const t = state.tabs[i];
+
       const el = document.createElement("div");
       el.className = `tab${t.id === state.activeId ? " active" : ""}${t.dirty ? " dirty" : ""}`;
       el.setAttribute("data-id", t.id);
+      el.setAttribute("data-idx", String(i));
+      el.draggable = true;
 
       const dot = document.createElement("div");
       dot.className = "dot";
@@ -1263,7 +1266,52 @@ KEY V3 FEATURES:
     api.registerCommand = function (id, label, onRun, opts) {
       return api.addToolbarButton(id, label, onRun, opts);
     };
+    // --- File access helpers for preview/group plugins ---
+    api.listOpenFiles = () => {
+      try {
+        return (state && state.tabs ? state.tabs : []).map((t) => ({
+          id: t.id,
+          name: t.name,
+          language: t.language,
+          dirty: !!t.dirty
+        }));
+      } catch (_) {
+        return [];
+      }
+    };
 
+    api.getActiveFile = () => {
+      try {
+        const t = (typeof activeTab === "function") ? activeTab() : null;
+        return t ? { id: t.id, name: t.name, language: t.language, dirty: !!t.dirty } : null;
+      } catch (_) {
+        return null;
+      }
+    };
+
+    api.getFileTextById = (id) => {
+      try {
+        const t = (state && state.tabs ? state.tabs : []).find((x) => x && x.id === id);
+        return (t && t.model && typeof t.model.getValue === "function") ? t.model.getValue() : "";
+      } catch (_) {
+        return "";
+      }
+    };
+
+    api.getFileTextByName = (name) => {
+      try {
+        const needle = String(name || "").trim().toLowerCase();
+        if (!needle) return "";
+        const tabs = (state && state.tabs ? state.tabs : []);
+        const t =
+          tabs.find((x) => x && String(x.name || "").trim().toLowerCase() === needle) ||
+          tabs.find((x) => x && String(x.name || "").trim().toLowerCase().endsWith("/" + needle)) ||
+          tabs.find((x) => x && String(x.name || "").trim().toLowerCase().endsWith("\\" + needle));
+        return (t && t.model && typeof t.model.getValue === "function") ? t.model.getValue() : "";
+      } catch (_) {
+        return "";
+      }
+    };
     window.Moonskai = api;
   }
 
@@ -1776,7 +1824,105 @@ KEY V3 FEATURES:
 
       setActiveTab(id);
     });
+    // ---------------------------
+    // Tab reorder (drag & drop)
+    // ---------------------------
+    let __dragTabId = null;
 
+    function __moveTabById(dragId, targetId, insertAfter) {
+      if (!dragId || !targetId || dragId === targetId) return;
+
+      const from = state.tabs.findIndex(t => t && t.id === dragId);
+      const to = state.tabs.findIndex(t => t && t.id === targetId);
+      if (from < 0 || to < 0) return;
+
+      const [moved] = state.tabs.splice(from, 1);
+
+      // If we removed an item before the target, the target index shifts left by 1.
+      let insertAt = to + (insertAfter ? 1 : 0);
+      if (from < insertAt) insertAt--;
+
+      insertAt = Math.max(0, Math.min(state.tabs.length, insertAt));
+      state.tabs.splice(insertAt, 0, moved);
+
+      renderTabs();
+      persistSessionSoon();
+    }
+
+          // Pointer-based tab reorder (works in installed PWA windows where HTML5 DnD can fail)
+      let __tabDrag = null; // { id, startX, active, lastOverId }
+
+      function __tabElFromEventTarget(t) {
+        try { return t && t.closest ? t.closest(".tab") : null; } catch (_) { return null; }
+      }
+
+      function __tabIdFromEl(el) {
+        try { return el ? (el.getAttribute("data-id") || "") : ""; } catch (_) { return ""; }
+      }
+
+      function __insertAfterByPointer(overEl, clientX) {
+        try {
+          const r = overEl.getBoundingClientRect();
+          return (clientX - r.left) > (r.width / 2);
+        } catch (_) {
+          return false;
+        }
+      }
+
+      ui.tabs.addEventListener("pointerdown", (e) => {
+        const tabEl = __tabElFromEventTarget(e.target);
+        if (!tabEl) return;
+
+        // Don't start dragging from the close button.
+        const isClose = e.target && e.target.closest ? e.target.closest(".close") : null;
+        if (isClose) return;
+
+        const id = __tabIdFromEl(tabEl);
+        if (!id) return;
+
+        __tabDrag = { id, startX: e.clientX, active: false, lastOverId: "" };
+
+        try { tabEl.setPointerCapture(e.pointerId); } catch (_) {}
+      });
+
+      ui.tabs.addEventListener("pointermove", (e) => {
+        if (!__tabDrag) return;
+
+        // Activate drag after small threshold (prevents breaking normal clicks)
+        if (!__tabDrag.active) {
+          if (Math.abs(e.clientX - __tabDrag.startX) < 6) return;
+          __tabDrag.active = true;
+        }
+
+        const overEl = __tabElFromEventTarget(document.elementFromPoint(e.clientX, e.clientY));
+        if (!overEl) return;
+
+        const overId = __tabIdFromEl(overEl);
+        if (!overId || overId === __tabDrag.id) return;
+
+        // Avoid hammering reorder if we're still over same tab
+        if (__tabDrag.lastOverId === overId) return;
+        __tabDrag.lastOverId = overId;
+
+        const insertAfter = __insertAfterByPointer(overEl, e.clientX);
+        __moveTabById(__tabDrag.id, overId, insertAfter);
+      });
+
+      ui.tabs.addEventListener("pointerup", (e) => {
+        if (!__tabDrag) return;
+
+        // If we were dragging, prevent the click that would fire after pointerup
+        if (__tabDrag.active) {
+          try { e.preventDefault(); } catch (_) {}
+          try { e.stopPropagation(); } catch (_) {}
+        }
+
+        __tabDrag = null;
+      });
+
+      ui.tabs.addEventListener("pointercancel", () => {
+        __tabDrag = null;
+      });
     ui.languageSelect.addEventListener("change", async () => {
       const t = activeTab();
       if (!t) return;
@@ -2439,4 +2585,4 @@ KEY V3 FEATURES:
     return editor;
   }
 
-})();
+})(); 
