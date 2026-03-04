@@ -259,12 +259,16 @@ KEY V3 FEATURES:
   // Utilities
   // ---------------------------
   function uuid() {
-    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
-      const r = (crypto.getRandomValues(new Uint8Array(1))[0] & 15) >> 0;
-      const v = c === "x" ? r : (r & 0x3) | 0x8;
-      return v.toString(16);
-    });
+  if (crypto && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
   }
+
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = crypto.getRandomValues(new Uint8Array(1))[0] & 15;
+    const v = c === "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
 
   function clamp(n, a, b) {
     return Math.max(a, Math.min(b, n));
@@ -903,58 +907,7 @@ KEY V3 FEATURES:
       try { editorCompare && editorCompare.layout(); } catch (_) {}
       try { diffEditor && diffEditor.layout(); } catch (_) {}
     });
-      // ---------------------------
-  // v4 Split layout (single vs split)
-  // ---------------------------
-  function applySplitLayoutClass() {
-    const isDiff = isDiffMode();
-    const layout = (state.view && state.view.layout) ? state.view.layout : "split";
-    const isSingle = layout === "single";
-
-    if (ui.splitWrap) ui.splitWrap.classList.toggle("single", isSingle);
-
-    const disableSplitControls = isDiff || isSingle;
-    if (ui.scrollLock) ui.scrollLock.disabled = disableSplitControls;
-    if (ui.lockMode) ui.lockMode.disabled = disableSplitControls;
-
-    if (disableSplitControls && state.scrollLock.enabled) {
-      state.scrollLock.enabled = false;
-      if (ui.scrollLock) ui.scrollLock.setAttribute("aria-pressed", "false");
-    }
-
-    updateViewToggleUI();
-  }
-
-  function applySplitLayout() {
-    applySplitLayoutClass();
-    requestAnimationFrame(() => {
-      try { editor && editor.layout(); } catch (_) {}
-      try { editorCompare && editorCompare.layout(); } catch (_) {}
-    });
-  }
-
-  function toggleSplitLayout() {
-    const cur = (state.view && state.view.layout) ? state.view.layout : "split";
-    state.view.layout = (cur === "single") ? "split" : "single";
-    applySplitLayout();
-  }
-
-  function updateViewToggleUI() {
-    if (!ui.viewToggle) return;
-    const isDiff = isDiffMode();
-    const isSingle = (state.view && state.view.layout) === "single";
-    ui.viewToggle.disabled = isDiff;
-    ui.viewToggle.setAttribute("aria-pressed", (!isDiff && isSingle) ? "true" : "false");
-    ui.viewToggle.textContent = isSingle ? "Split View" : "Single View";
-    ui.viewToggle.title = isDiff ? "View toggle disabled in Diff mode" : (isSingle ? "Show split view (master + compare)" : "Show single view (master only)");
-  }
-
-  function getActiveEditor() {
-    if (isDiffMode() && diffEditor) {
-      try { return diffEditor.getOriginalEditor(); } catch (_) {}
-    }
-    return editor;
-  }
+     
 
   }
 
@@ -1606,15 +1559,42 @@ KEY V3 FEATURES:
   }
 
 
-  async function saveAll() {
-    for (const t of state.tabs) {
-      state.activeId = t.id;
-      editor.setModel(t.model);
-      await saveActive();
+ async function saveAll() {
+  const originalActiveId = state.activeId;
+  let savedCount = 0;
+  let skippedCount = 0;
+
+  for (const t of state.tabs) {
+    if (!t) continue;
+
+    if (t.handle) {
+      try {
+        const ok = await writeTabToHandle(t, {
+          statusLabel: "Saved",
+          silent: true,
+          promptPermission: true
+        });
+        if (ok) savedCount++;
+        else skippedCount++;
+      } catch (e) {
+        console.warn("[Moonskai] Save All failed for tab:", t && t.name, e);
+        skippedCount++;
+      }
+    } else {
+      skippedCount++;
     }
-    setActiveTab(state.activeId);
-    setStatus("Saved all");
   }
+
+  if (originalActiveId) {
+    setActiveTab(originalActiveId);
+  }
+
+  if (skippedCount > 0) {
+    setStatus(`Saved ${savedCount} file(s), skipped ${skippedCount}`);
+  } else {
+    setStatus(`Saved all (${savedCount})`);
+  }
+}
 
   // ---------------------------
   // Session persistence (IndexedDB docs + localStorage pointers)
