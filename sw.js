@@ -6,7 +6,127 @@ CREATED BY: Scott Russo.
 const CACHE_NAME = "moonskai-editor-v3.0.1"; // bump to force clients to refresh cached app shell
 
 const ASSETS = [
+  "./",/*
+PATH: /sw.js
+FILE: sw.js
+PURPOSE: Moonskai Editor service worker with offline caching for app-shell assets,
+         while completely bypassing localhost / 127.0.0.1 / ::1 bridge requests.
+CREATED BY: Scott Russo.
+*/
+
+const CACHE_NAME = "moonskai-editor-v3.0.2";
+
+const ASSETS = [
   "./",
+  "./index.html",
+  "./styles.css",
+  "./moonskai-editor.js",
+  "./manifest.json",
+
+  "./vendor/monaco/vs/loader.js",
+  "./vendor/monaco/vs/editor/editor.main.js",
+  "./vendor/monaco/vs/editor/editor.main.css",
+  "./vendor/monaco/vs/base/common/worker/simpleWorker.nls.js",
+  "./vendor/monaco/vs/base/worker/workerMain.js",
+
+  "./vendor/monaco/vs/basic-languages/javascript/javascript.js",
+  "./vendor/monaco/vs/basic-languages/typescript/typescript.js",
+  "./vendor/monaco/vs/basic-languages/html/html.js",
+  "./vendor/monaco/vs/basic-languages/css/css.js",
+  "./vendor/monaco/vs/basic-languages/json/json.js",
+  "./vendor/monaco/vs/basic-languages/yaml/yaml.js",
+  "./vendor/monaco/vs/basic-languages/markdown/markdown.js",
+];
+
+function isLocalBridgeRequest(req) {
+  try {
+    const url = new URL(req.url);
+    return (
+      url.protocol === "http:" &&
+      (
+        url.hostname === "127.0.0.1" ||
+        url.hostname === "localhost" ||
+        url.hostname === "::1" ||
+        url.hostname === "[::1]"
+      )
+    );
+  } catch (_) {
+    return false;
+  }
+}
+
+self.addEventListener("install", (event) => {
+  event.waitUntil((async () => {
+    const cache = await caches.open(CACHE_NAME);
+    await Promise.allSettled(ASSETS.map((u) => cache.add(u)));
+    await self.skipWaiting();
+  })());
+});
+
+self.addEventListener("activate", (event) => {
+  event.waitUntil((async () => {
+    const keys = await caches.keys();
+    await Promise.all(
+      keys.map((k) => (k === CACHE_NAME ? null : caches.delete(k)))
+    );
+    await self.clients.claim();
+  })());
+});
+
+self.addEventListener("fetch", (event) => {
+  const req = event.request;
+
+  if (req.method !== "GET") return;
+
+  // Never intercept the local git bridge.
+  // Let the browser talk to localhost directly with no cache/offline wrapper.
+  if (isLocalBridgeRequest(req)) {
+    event.respondWith(fetch(req));
+    return;
+  }
+
+  const isNav = req.mode === "navigate" || req.destination === "document";
+
+  event.respondWith((async () => {
+    const cache = await caches.open(CACHE_NAME);
+
+    if (isNav) {
+      try {
+        const res = await fetch(req);
+        if (res && res.ok) {
+          await cache.put(req, res.clone());
+        }
+        return res;
+      } catch (_) {
+        const shell = await cache.match("./index.html", { ignoreSearch: true });
+        return shell || new Response("Offline", {
+          status: 503,
+          statusText: "Offline"
+        });
+      }
+    }
+
+    const cached = await cache.match(req, { ignoreSearch: true });
+    if (cached) return cached;
+
+    try {
+      const res = await fetch(req);
+      const url = new URL(req.url);
+
+      if (url.origin === self.location.origin && res && res.ok) {
+        await cache.put(req, res.clone());
+      }
+
+      return res;
+    } catch (_) {
+      const shell = await cache.match("./index.html", { ignoreSearch: true });
+      return shell || new Response("Offline", {
+        status: 503,
+        statusText: "Offline"
+      });
+    }
+  })());
+});
   "./index.html",
   "./styles.css",
   "./moonskai-editor.js",
